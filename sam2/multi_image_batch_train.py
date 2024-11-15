@@ -7,8 +7,8 @@ from torch.onnx.symbolic_opset11 import hstack
 from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 
+# check the device and set the default device
 device = 'cpu' if torch.backends.mps.is_available() else 'mps'
-
 # if torch.cuda.is_available():
 #     device = torch.device("cuda")
 # elif torch.backends.mps.is_available():
@@ -16,12 +16,13 @@ device = 'cpu' if torch.backends.mps.is_available() else 'mps'
 # else:
 #     device = torch.device("cpu")
 # print(f"Using device: {device}")
-
 device = torch.device(device=device)
 
+#  path to the dataset
 data_dir = "./assets/LabPicsV1/" # path to the dataset
 data = [] # list of files in the dataset
 
+#list the dir and append them into the list with image and annotation.
 for ff, name in enumerate(os.listdir(data_dir + "Simple/Train/Image/")):
     # 遍历数据目录中的所有图像文件
     # ff: 当前文件的索引
@@ -33,6 +34,8 @@ for ff, name in enumerate(os.listdir(data_dir + "Simple/Train/Image/")):
     data.append({"image":data_dir+"Simple/Train/Image/"+name, "annotation":data_dir+"Simple/Train/Instance/"+name[:-4]+".png"})
     print(f"Processing {ff} of {len(os.listdir(data_dir + 'Simple/Train/Image/'))}")
 
+
+#define a read_single function
 def read_single(data): # read the random image and its annotation from the dataset
     # select image
     # 这行代码的意思是从数据列表中随机选择一个条目
@@ -60,11 +63,11 @@ def read_single(data): # read the random image and its annotation from the datas
     Img = cv2.resize(Img, (int(Img.shape[1] * r), int(Img.shape[0] * r)))
     # 使用最近邻插值方法调整注释图像的大小
     ann_map = cv2.resize(ann_map, (int(ann_map.shape[1] * r), int(ann_map.shape[0] * r)), interpolation=cv2.INTER_NEAREST)
-    # 从高度上
+    # 从高度上来补充
     if Img.shape[0]<1024:
-        Img = np.concatenate([Img, np.zeros([1024 - Img.shape[0], Img.shape[1],2], dtype=np.uint8)], axis=0)
+        Img = np.concatenate([Img, np.zeros([1024 - Img.shape[0], Img.shape[1],3], dtype=np.uint8)], axis=0)
         ann_map = np.concatenate([ann_map,np.zeros([1024- ann_map.shape[0], ann_map.shape[1],3], dtype=np.uint8)],axis=0)
-    # 从宽度上
+    # 从宽度上来补充
     if Img.shape[1]<1024:
         Img = np.concatenate([Img, np.zeros([Img.shape[0], 1024-Img.shape[1],3], dtype=np.uint8)], axis=1)
         ann_map = np.concatenate([ann_map, np.zeros([ann_map.shape[0], 1024- ann_map.shape[1], 3],dtype=np.uint8)], axis=1)
@@ -97,7 +100,7 @@ def read_single(data): # read the random image and its annotation from the datas
     else:
         return read_single(data)
     
-    mask =(mat_map ==ind).astype(np.uint8)
+    mask =(mat_map ==ind).astype(np.uint8) #mask 
     coords = np.argwhere(mask >0) # 会返回所有非零位置的坐标 行和列，所有有yx[1], yx[0]的说法
     yx = np.array(coords[np.random.randint(len(coords))])
 
@@ -162,10 +165,10 @@ try:
                                                                                     boxes=None, 
                                                                                     masks=None,)
 
-            
+            # high resolution pictures
             high_res_features = [feat_level[-1].unsqueeze(0) for feat_level in predictor._features["high_res_feats"]]
             image_embeddings = predictor._features["image_embed"]
-            # 图片特征跟我们的提示点的特征是否相等
+            # 图片特征跟我们的提示点的特征是否相等,
             if image_embeddings.shape[0] !=sparse_embeddings.shape[0]:
                 image_embeddings = image_embeddings.repeat(sparse_embeddings.shape[0],1,1,1)
             low_res_masks, prd_scores, _, _ = predictor.model.sam_mask_decoder(image_embeddings=image_embeddings,
