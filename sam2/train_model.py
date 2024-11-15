@@ -8,7 +8,7 @@ import sys
 from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 
-device = 'mps' if torch.backends.mps.is_available() else 'cpu'
+device = 'cpu' if torch.backends.mps.is_available() else 'mps'
 
 # if torch.cuda.is_available():
 #     device = torch.device("cuda")
