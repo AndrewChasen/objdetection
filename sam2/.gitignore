@@ -32,4 +32,6 @@ README.md
 requirements.txt
 .github
 model.torch
-
+annotation.png
+mix.png
+test/
