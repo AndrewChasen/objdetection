@@ -155,11 +155,13 @@ def read_batch(data, batch_size=4):
             limage.append(image)
             lmask.append(mask)
             linput_point.append(input_point)
-            if len(limage) == 0:
-                print("没有有效样本")
+        if len(limage) == 0:
+            print("没有有效样本")
             return None, None, None, None
-            # 会创建一个4行1列的数组，所有元素都是1 np.ones([batch_size,1]
-        return limage, np.array(lmask), np.array(linput_point), np.ones([batch_size,1])
+        # 确保返回的批次大小正确
+        actual_batch_size = len(limage)
+            # 会创建一个4行1列的数组，所有元素都是1 np.ones([actual_batch_size,1]
+        return limage, np.array(lmask), np.array(linput_point), np.ones([actual_batch_size,1])
     except Exception as e:
         print(f"批量读取错误: {str(e)}")
         return None, None, None, None
@@ -170,9 +172,17 @@ def initialize_model(checkpoint_path, model_cfg, device):
         # 检查文件是否存在
         if not os.path.exists(checkpoint_path):
             raise FileNotFoundError(f"检查点文件不存在: {checkpoint_path}")
-        if not os.path.exists(model_cfg):
-            raise FileNotFoundError(f"配置文件不存在: {model_cfg}")
+            
+        # 获取当前目录
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        # 构建完整的配置文件路径
+        full_config_path = os.path.join(current_dir, "sam2", model_cfg)
+        if not os.path.exists(full_config_path):
+            raise FileNotFoundError(f"配置文件不存在: {full_config_path}")
+
         sam2_model = build_sam2(model_cfg, checkpoint_path, device=device)
+        if sam2_model is None:
+            raise RuntimeError("模型构建失败")
         predictor = SAM2ImagePredictor(sam2_model)
         # 确保模型在正确的设备上
         sam2_model = sam2_model.to(device)
@@ -202,11 +212,11 @@ def setup_optimizer(predictor):
         return None
 
 def train_sam2(
-        data_dir="./assets/LabPicsV1/", 
-        checkpoint_path="./checkpoints/sam2.1_hiera_tiny.pt",
-        model_cfg="configs/sam2.1/sam2.1_hiera_t.yaml",
-        max_epochs=100,
-        patience=10):
+        data_dir:str, 
+        checkpoint_path:str,
+        model_cfg:str,
+        max_epochs:int=100,
+        patience:int=10):
     try:
         data = prepare_data(data_dir)
         if data is None:
@@ -302,17 +312,10 @@ def train_loop(data, predictor,optimizer,model,max_epochs=100, patience=10):
                     inter= (gt_mask* (prd_mask>0.5)).sum(1).sum(1) # calculate from the height and width.
                     iou = inter / (gt_mask.sum(1).sum(1) + (prd_mask > 0.5).sum(1).sum(1) - inter)
                     score_loss = torch.abs(prd_scores[:, 0] - iou).mean()
-                
-
                     loss = seg_loss + score_loss*0.05
 
                     #apply back propogation
-
-                    predictor.zero_grad()
-                    # scaler.scale(loss).backward() # backpropogate
-                    # scaler.step(optimizer)
-                    # scaler.update()
-                    predictor.zero_grad()
+                    optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
 
@@ -381,27 +384,35 @@ def plot_training_history(history):
     plt.close()
 
 if __name__ == "__main__":
-    config = {
-    "data_dir": "./assets/LabPicsV1/", # path to the dataset"
-    "checkpoint_path" : "./checkpoints/sam2.1_hiera_tiny.pt",
-    "model_cfg" : "configs/sam2.1/sam2.1_hiera_t.yaml",
-    "max_epochs": 100,
-    "patience": 10
-    }
-
+    # 获取当前文件的目录
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(current_dir)  # 项目根目录
+    print(f"项目根目录: {project_root}")
     try:
-        # 检查必要文件是否存在
-        if not os.path.exists(config["data_dir"]):
-            raise FileNotFoundError(f"数据目录不存在: {config['data_dir']}")
-        if not os.path.exists(config["checkpoint_path"]):
-            raise FileNotFoundError(f"检查点文件不存在: {config['checkpoint_path']}")
-        if not os.path.exists(config["model_cfg"]):
-            raise FileNotFoundError(f"配置文件不存在: {config['model_cfg']}")
+        import hydra
+        from hydra import initialize, compose
+        hydra.core.global_hydra.GlobalHydra.instance().clear()
+        os.chdir(current_dir)
+        initialize(config_path="sam2", version_base=None)
+
+        config = {
+        "data_dir": os.path.join(current_dir, "assets/LabPicsV1/"),
+        "checkpoint_path": os.path.join(current_dir, "checkpoints/sam2.1_hiera_tiny.pt"),
+        "model_cfg": "configs/sam2.1/sam2.1_hiera_t.yaml",
+        "max_epochs": 100,
+        "patience": 10 
+        }
+        
+        
+        # 检查文件是否存在
+        full_config_path = os.path.join(current_dir, "sam2", config["model_cfg"])
+        if not os.path.exists(full_config_path):
+            raise FileNotFoundError(f"配置文件不存在: {full_config_path}")
         
         print("开始训练...")
         history = train_sam2(**config)
         print("训练完成！")
     except Exception as e:
-        print(f"发生的错误:{str(e)}")
+        print(f"发生的错误:{str(e)}")   
         import traceback
         print(traceback.format_exc())
