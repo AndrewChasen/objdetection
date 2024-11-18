@@ -88,7 +88,13 @@ def read_single(data): # read the random image and its annotation from the datas
         # cv2.imread(ent["image"]) 读取图像文件
         # [...,::-1] 将图像从BGR格式转换为RGB格式
         # two differnt images on is the origin images one is the annotation
-        Img = cv2.imread(ent["image"])[...,::-1] # read image
+        Img = cv2.imread(ent["image"])[...,::-1] # read image #ent is the dictionary, we use the key "image" to get the value, 
+        #and then read the image by cv2.imread, and then convert the image from BGR to RGB by [...,::-1] which
+        # is the reverse of the image, first is the channel, second is the height, third is the width, 
+        # we use the [...,::-1] to reverse the image, the ::-1 means the reverse of the image, ... is the all
+        # the image is a three-dimensional array, the first dimension is the channel, the second dimension is the height, 
+        # the third dimension is the width, we use the [...,::-1] to reverse the image, the ::-1 means the reverse of the image,
+        # ... is the all, -1 is the step of the reverse, so the [...,::-1] means the reverse of the image
         ann_map = cv2.imread(ent["annotation"]) # read annotation
         print("原始图像形状:", Img.shape)
         print("原始注释图像形状:", ann_map.shape)
@@ -98,12 +104,21 @@ def read_single(data): # read the random image and its annotation from the datas
         # 具体来说，它计算了1024与图像宽度的比值（1024 / Img.shape[1]）和1024与图像高度的比值（1024 / Img.shape[0]），
         # 然后取这两个比值中的最小值作为缩放比例r。
         # 这样可以确保图像在缩放后，宽度和高度都不会超过1024像素，同时保持图像的宽高比不变。
-        r = np.min([1024 / Img.shape[1], 1024 / Img.shape[0]])
-        Img = cv2.resize(Img, (int(Img.shape[1] * r), int(Img.shape[0] * r)))
+        r = np.min([1024 / Img.shape[1], 1024 / Img.shape[0]]) # 计算缩放比例
+        Img = cv2.resize(Img, (int(Img.shape[1] * r), int(Img.shape[0] * r))) # 使用最近邻插值方法调整图像的大小
         # 使用最近邻插值方法调整注释图像的大小
         ann_map = cv2.resize(ann_map, (int(ann_map.shape[1] * r), int(ann_map.shape[0] * r)), interpolation=cv2.INTER_NEAREST)
         # 从高度上来补充
         if Img.shape[0]<1024:
+            # 在图像的底部添加一个全零的图像，以确保图像的高度为1024像素
+            # np.zeros([1024 - Img.shape[0], Img.shape[1],3], dtype=np.uint8) 创建一个全零的图像，
+            # 其高度为1024减去当前高度，宽度保持不变，通道数为3（RGB图像），数据类型为uint8
+            # np.concatenate 将两个图像沿着垂直方向（轴0）拼接在一起
+            # 这样做的目的是在图像的底部添加一个全零的图像，以确保图像的高度为1024像素
+            # 全零的图像在图像处理中常用于填充，以确保图像的大小符合预期
+            # 在图像处理中，有时需要将图像的高度调整为某个固定值，例如1024像素
+            # 如果原始图像的高度小于1024像素，可以通过在图像底部添加一个全零的图像来实现
+            # 这样可以确保调整后的图像高度为1024像素，同时保持图像的宽高比不变
             Img = np.concatenate([Img, np.zeros([1024 - Img.shape[0], Img.shape[1],3], dtype=np.uint8)], axis=0)
             ann_map = np.concatenate([ann_map,np.zeros([1024- ann_map.shape[0], ann_map.shape[1],3], dtype=np.uint8)],axis=0)
         # 从宽度上来补充
@@ -117,51 +132,65 @@ def read_single(data): # read the random image and its annotation from the datas
         # ves_map 是注释图像的第三个通道，表示容器注释
         # 然后，将材料注释图像中值为0的像素替换为容器注释图像中值为0的像素，并将其值加上材料注释图像的最大值加1
         # 最后，将材料注释图像、一个全零的图像和容器注释图像堆叠在一起，形成一个新的注释图像
-        mat_map = ann_map[:,:,0] # material annotation map
-        ves_map = ann_map[:,:,2] # vessels annotation map
+        mat_map = ann_map[:,:,0] # material annotation map, the first channel is the material annotation
+        ves_map = ann_map[:,:,2] # vessels annotation map, the third channel is the vessels annotation
     
         # mat_map[mat_map==0] = ves_map[mat_map==0]*(mat_map.max()+1) # merge maps
-        mask = mat_map == 0
-        ves_values = ves_map[mask]
-        mat_map[mask] = ves_values * (mat_map.max() + 1 if mat_map.max() > 0 else 1)
+        mask = mat_map == 0 # mask is the material annotation map, the material annotation is 0
+        # we check if the material annotation is 0, if it is, then we set the mask to True.
+        # 
+        ves_values = ves_map[mask] # ves_values is the vessels annotation map, the vessels annotation is 0
+        # we check the vessels annotation map, if the vessels annotation is 0, then we set the vessels annotation to the material annotation
+        
+        mat_map[mask] = ves_values * (mat_map.max() + 1 if mat_map.max() > 0 else 1) # merge maps
+        # 
     
-        inds= np.unique(mat_map)[1:]  # ignore the 0 position
+        inds= np.unique(mat_map)[1:]  # ignore the 0 position, the 0 position is the background, leave the first position
 
-        if inds.__len__()>0:
-            ind = inds[np.random.randint(inds.__len__())]
+        if inds.__len__()>0: # if the inds is not empty
+            ind = inds[np.random.randint(inds.__len__())] # randomly select an index from the inds
         else:
-            return read_single(data)
+            return read_single(data) # if the inds is empty, then we read the single image again
         
         mask =(mat_map ==ind).astype(np.uint8) #mask 
         coords = np.argwhere(mask >0) # 会返回所有非零位置的坐标 行和列，所有有yx[1], yx[0]的说法
         yx = np.array(coords[np.random.randint(len(coords))])
 
-        return Img, mask, [[yx[1], yx[0]]]
+        return Img, mask, [[yx[1], yx[0]]] # return the image, the mask, and the coordinates of the mask
+        # note that the coordinates of the mask are the coordinates of the mask in the image and 
+        # it is the merge of the material and vessels annotation, two different annotations together
     
     except Exception as e:
             print(f"读取样本错误: {str(e)}")
             return None, None, None
 
-def read_batch(data, batch_size=4):
+def read_batch(data, batch_size=4): # read the batch of the images
     limage = []
     lmask = []
     linput_point = []
     try: 
         for  i in range(batch_size):
-            image, mask, input_point = read_single(data)
+            image, mask, input_point = read_single(data) # the input_point is the coordinates of the mask,
+            # which is the merge of the material and vessels annotation, two different annotations together
             if image is None or mask is None or input_point is None:
                 print(f"跳过无效样本 {i+1}")
                 continue
             limage.append(image)
             lmask.append(mask)
             linput_point.append(input_point)
-        if len(limage) == 0:
+        if len(limage) == 0: # limage is the list of the images
             print("没有有效样本")
             return None, None, None, None
         # 确保返回的批次大小正确
         actual_batch_size = len(limage)
             # 会创建一个4行1列的数组，所有元素都是1 np.ones([actual_batch_size,1]
-        return limage, np.array(lmask), np.array(linput_point), np.ones([actual_batch_size,1])
+        return limage, np.array(lmask), np.array(linput_point), np.ones([actual_batch_size,1]) # return the images, 
+        # the masks, the coordinates of the masks, and the ones
+        # limage is the list of the images, lmask is the list of the masks, linput_point is the list of the coordinates of 
+        # the masks,
+        # np.ones([actual_batch_size,1]) is the ones, which is the labels of the masks
+        # here we use actual_batch_size to ensure the batch size is correct, and the labels are all 1
+        # means the length of the labels is the same as the batch size with all 1s in the array.
     except Exception as e:
         print(f"批量读取错误: {str(e)}")
         return None, None, None, None
@@ -210,52 +239,51 @@ def setup_optimizer(predictor):
     except Exception as e:
         print(f"优化器设置错误: {str(e)}")
         return None
-
-def train_sam2(
-        data_dir:str, 
-        checkpoint_path:str,
-        model_cfg:str,
-        max_epochs:int=100,
-        patience:int=10):
-    try:
-        data = prepare_data(data_dir)
-        if data is None:
-            return
-
-        device = setup_device()
-        model, predictor = initialize_model(checkpoint_path,model_cfg,device)
-        if model is None or predictor is None:
-            return
-        optimizer = setup_optimizer(predictor)
-        if optimizer is None:
-            return
-        history = train_loop(data, predictor,optimizer,model,max_epochs=max_epochs, 
-                           patience=patience)
-
-        return history
-    except Exception as e:
-        print(f"训练过程错误: {str(e)}")
-        import traceback
-        print(traceback.format_exc())
-
     
-    # scaler = torch.amp.GradScaler(device=device.type)  
+def plot_training_history(history):
+    # 这段代码的含义是绘制训练过程中的IoU和Loss曲线。
+    # 首先，创建一个12x4英寸的图像，用于绘制两个子图。
+    # 然后，在第一个子图中绘制IoU曲线，横轴为Epoch，纵轴为IoU。
+    # 在第二个子图中绘制Loss曲线，横轴为Epoch，纵轴为Loss。 
+    plt.figure(figsize=(12, 4))
+    
+    # 绘制IoU曲线
+    plt.subplot(1, 2, 1)
+    plt.plot(history['iou'])
+    plt.title('IoU over epochs')
+    plt.xlabel('Epoch')
+    plt.ylabel('IoU')
+    
+    # 绘制Loss曲线
+    plt.subplot(1, 2, 2)
+    plt.plot(history['loss'])
+    plt.title('Loss over epochs')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    
+    # 调整子图之间的间距，使它们更紧凑  
+    plt.tight_layout()
+    # 保存图像为PNG文件
+    plt.savefig('training_history.png')
+    # 关闭图像窗口
+    plt.close()
+
 
 def train_loop(data, predictor,optimizer,model,max_epochs=100, patience=10):
     best_iou = 0
     no_improve = 0
     history = {'iou':[], 'loss':[]}
-    device=next(model.parameters()).device 
+    device=next(model.parameters()).device # get the device of the model
+    # next(model.parameters()) is used to get the first parameter of the model, which is the model parameters
+    # .device is used to get the device of the model parameters 
     mean_iou = 0
     try:
         for epoch in range(max_epochs):
             print(f"\nEpoch {epoch+1}/{max_epochs}")
             epoch_ious = []
             epoch_losses = []
-
-            for itr in range(30):
-                            
-                image, mask, input_point, input_label = read_batch(data, batch_size=4) # load data batch
+            for itr in range(30):                            
+                image, mask, input_point, input_label = read_batch(data, batch_size=4) # load data batch with batch size 4 into the model
                 if image is None or mask is None:
                         print("跳过无效数据批次")
                         continue      
@@ -268,8 +296,7 @@ def train_loop(data, predictor,optimizer,model,max_epochs=100, patience=10):
                     # 该方法返回掩码输入、未归一化的坐标、标签和未归一化的框。
                     # 最后，这些返回值可以用于进一步的处理或训练。
                 with torch.amp.autocast(device_type=device.type):
-                    predictor.set_image_batch(image) # apply sam image encoder to the image
-
+                    predictor.set_image_batch(image) # apply sam image encoder to the images batch
                     mask_input, unnorm_coords, labels, unnorm_box = predictor._prep_prompts(input_point, input_label, 
                                                                                             box=None, mask_logits=None, 
                                                                                             normalize_coords=True)
@@ -279,7 +306,6 @@ def train_loop(data, predictor,optimizer,model,max_epochs=100, patience=10):
                     sparse_embeddings, dense_embeddings = predictor.model.sam_prompt_encoder(points=(unnorm_coords, labels), 
                                                                                             boxes=None, 
                                                                                             masks=None,)
-
                     # high resolution pictures
                     high_res_features = [feat_level[-1].unsqueeze(0) for feat_level in predictor._features["high_res_feats"]]
                     image_embeddings = predictor._features["image_embed"]
@@ -293,10 +319,9 @@ def train_loop(data, predictor,optimizer,model,max_epochs=100, patience=10):
                                                                                     multimask_output=True,
                                                                                     repeat_image=False,
                                                                                     high_res_features=high_res_features,)
-                    
+                    # Upscale the masks to the original image resolution
                     prd_masks = predictor._transforms.postprocess_masks(low_res_masks, 
-                                                                        predictor._orig_hw[-1])# Upscale the masks to the original image resolution
-
+                                                                        predictor._orig_hw[-1])             
                     # 这段代码的含义是计算分割损失和交并比（IoU）损失，并将它们结合起来得到最终的损失值。
                     # 首先，使用预测的掩码和真实掩码计算分割损失。分割损失是通过交叉熵损失计算的，
                     # 其中预测的掩码通过sigmoid函数进行归一化。然后，计算交并比（IoU）损失，
@@ -304,8 +329,8 @@ def train_loop(data, predictor,optimizer,model,max_epochs=100, patience=10):
                     # 最后，将分割损失和交并比损失结合起来，得到最终的损失值。
                     # 其中，分割损失和交并比损失的权重分别为1和0.05。
                     prd_mask = torch.sigmoid(prd_masks[:,0]) # 预测出来的mask
-                    gt_mask = torch.tensor(mask.astype(np.float32)).to(device=device) #我们自己的mask
-
+                    gt_mask = torch.tensor(mask.astype(np.float32)).to(device=device) #我们自己的真实mask
+                    # 计算分割损失
                     seg_loss = (-gt_mask * torch.log(prd_mask + 0.00001) - (1- gt_mask) * torch.log((1- prd_mask) + 0.00001)).mean()
 
                     #score loss calculation iou
@@ -330,10 +355,13 @@ def train_loop(data, predictor,optimizer,model,max_epochs=100, patience=10):
                         mean_iou = mean_iou * 0.99 +0.01 * np.mean(iou.cpu().detach().numpy())
                         print(f"Iteration {itr}, Mean IoU: {mean_iou}")
                     print(f"running....{itr}")
+            # calculate the average iou and loss
             avg_iou = np.mean(epoch_ious)
             avg_loss = np.mean(epoch_losses)
+            # append the average iou and loss to the history
             history['iou'].append(avg_iou)
             history['loss'].append(avg_loss)
+            # print the average iou and loss
             print(f"\nEpoch {epoch+1} Summary:")
             print(f"Average IoU: {avg_iou:.4f}")
             print(f"Average Loss: {avg_loss:.4f}")
@@ -350,11 +378,14 @@ def train_loop(data, predictor,optimizer,model,max_epochs=100, patience=10):
                 }, "best_model.pth")
                 print(f"保存新的最佳模型,IoU: {best_iou:.4f}")
             else:
+                # if the iou is not improved, then we add 1 to the no_improve
                 no_improve += 1
                 print(f"模型性能未提升，已经 {no_improve} 轮")
             if no_improve >=patience:
+                # if the iou is not improved for the patience times, then we stop the training  
                 print(f"模型性能已经 {patience} 轮未提升，停止训练！")
                 break
+        # plot the training history
         plot_training_history(history)
     except Exception as e:
         print(f"训练出错: {str(e)}")
@@ -362,26 +393,29 @@ def train_loop(data, predictor,optimizer,model,max_epochs=100, patience=10):
         print(traceback.format_exc())
     return history
 
-def plot_training_history(history):
-    plt.figure(figsize=(12, 4))
-    
-    # 绘制IoU曲线
-    plt.subplot(1, 2, 1)
-    plt.plot(history['iou'])
-    plt.title('IoU over epochs')
-    plt.xlabel('Epoch')
-    plt.ylabel('IoU')
-    
-    # 绘制Loss曲线
-    plt.subplot(1, 2, 2)
-    plt.plot(history['loss'])
-    plt.title('Loss over epochs')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    
-    plt.tight_layout()
-    plt.savefig('training_history.png')
-    plt.close()
+def train_sam2(
+        data_dir:str, 
+        checkpoint_path:str,
+        model_cfg:str,
+        max_epochs:int=100,
+        patience:int=10):
+    try:
+        data = prepare_data(data_dir)
+        if data is None:
+            return
+        device = setup_device()
+        model, predictor = initialize_model(checkpoint_path,model_cfg,device)
+        if model is None or predictor is None:
+            return
+        optimizer = setup_optimizer(predictor)
+        if optimizer is None:
+            return
+        history = train_loop(data, predictor,optimizer,model, max_epochs=max_epochs, patience=patience)
+        return history
+    except Exception as e:
+        print(f"训练过程错误: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
 
 if __name__ == "__main__":
     # 获取当前文件的目录
@@ -390,26 +424,26 @@ if __name__ == "__main__":
     print(f"项目根目录: {project_root}")
     try:
         import hydra
-        from hydra import initialize, compose
+        from hydra import initialize
         hydra.core.global_hydra.GlobalHydra.instance().clear()
         os.chdir(current_dir)
         initialize(config_path="sam2", version_base=None)
-
+        # 配置文件
         config = {
         "data_dir": os.path.join(current_dir, "assets/LabPicsV1/"),
         "checkpoint_path": os.path.join(current_dir, "checkpoints/sam2.1_hiera_tiny.pt"),
         "model_cfg": "configs/sam2.1/sam2.1_hiera_t.yaml",
         "max_epochs": 100,
         "patience": 10 
-        }
-        
+        }       
         
         # 检查文件是否存在
         full_config_path = os.path.join(current_dir, "sam2", config["model_cfg"])
         if not os.path.exists(full_config_path):
             raise FileNotFoundError(f"配置文件不存在: {full_config_path}")
-        
+        # 开始训练
         print("开始训练...")
+        # 训练模型, 结果保存在history中， history中包含iou和loss,我们并没有使用最后的结果   
         history = train_sam2(**config)
         print("训练完成！")
     except Exception as e:
