@@ -250,9 +250,18 @@ class KeyFrameExtractor:
         基于自适应检测提取关键帧
         """
         try:
+            print(f"\n使用自适应检测:")
+            print(f"- 最小场景长度: {min_scene_len}帧")
+            print(f"- 视频帧率: {self.fps}")
+            print(f"- 视频总时长: {self.duration:.2f}秒")
             video_path = str(self.video_path)
-            scenes = detect(video_path, AdaptiveDetector(min_scene_len=min_scene_len))
-            return self._save_keyframes(scenes, "adaptive")   
+            detector = AdaptiveDetector(
+                min_scene_len=min_scene_len,  # 最小场景长度
+            )
+            scenes = detect(video_path, detector, show_progress=True)
+            keyframes = self._save_keyframes(scenes, "adaptive")
+            print(f"自适应检测完成: 找到 {len(keyframes)} 个场景")
+            return keyframes   
         except Exception as e:
             print(f"Error detecting scenes: {e}")
             return []
