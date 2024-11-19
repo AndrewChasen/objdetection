@@ -108,7 +108,7 @@ END_IDX = 100
 BASE_DIR = Path('./assets')
 VIDEO_FRAMES_DIR = BASE_DIR / 'video_frames'  # 专门存放视频抽帧的目录
 SOURCE_VIDEO = BASE_DIR / 'video' / '01_dog.mp4'
-OUTPUT_DIR = BASE_DIR / 'keyframes'
+OUTPUT_DIR = BASE_DIR / 'keyframes' # 存放关键帧的目录
 VIDEO_FRAMES_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -165,12 +165,19 @@ class KeyFrameExtractor:
     def __init__(self, video_path, output_dir, config=None):
         """
         关键帧提取器
+        Args:
+            video_path: 视频路径
+            output_dir: 输出目录
+            config: 配置参数字典
         """
         self.config = config or {
-            "content_threshold": 2.0,
-            "min_scene_len": 2,  
-            "interval": 0.2,
+            "content_threshold": 27.0,  # 提高阈值以减少误检
+            "min_scene_len": 3,  # 增加最小场景长度
+            "interval": 0.5,     # 调整间隔
+            "adaptive_threshold": 3.0,  # 自适应检测阈值
+            "luma_only": False,   # 是否只使用亮度通道
         }
+        
         try:    
             self.video_path = Path(video_path)
             self.output_dir = Path(output_dir)
@@ -196,30 +203,48 @@ class KeyFrameExtractor:
 
     def _save_keyframes(self, scenes, method_name):
         """
-        保存关键帧
+        优化的关键帧保存函数
         """
         try:
             keyframe_paths = []
             output_dir = self.output_dir / method_name
             output_dir.mkdir(exist_ok=True)
             
-            # 使用cv2库来读取视频
             cap = cv2.VideoCapture(str(self.video_path))
-            fram_numbers = [scene[0].frame_num for scene in scenes]
-            for i,fram_number in enumerate(fram_numbers):
+            
+            # 优化：同时保存场景信息
+            scene_info = []
+            
+            for i, scene in enumerate(scenes):
+                frame_num = scene[0].frame_num # 获取场景的开始帧
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num) # 设置视频读取的帧数
+                ret, frame = cap.read() # 读取帧
                 
-                cap.set(cv2.CAP_PROP_POS_FRAMES, fram_number)
-                ret, frame = cap.read()
                 if ret:
-                    output_path = output_dir / f"keyframe_{i:04d}.jpg" 
-                    cv2.imwrite(output_path, frame)
+                    # 添加时间戳信息
+                    timestamp = frame_num / self.fps
+                    output_path = output_dir / f"keyframe_{i:04d}_time_{timestamp:.2f}s.jpg"
+                    cv2.imwrite(str(output_path), frame)
                     keyframe_paths.append(output_path)
-                    print(f"Saved keyframe {i} to {output_path}")
+                    
+                    scene_info.append({
+                        'frame_num': frame_num,
+                        'timestamp': timestamp,
+                        'duration': scene[1].get_seconds() - scene[0].get_seconds()
+                    })
+                    
+                    print(f"保存关键帧 {i+1}/{len(scenes)}, 时间戳: {timestamp:.2f}s")
+            
+            # 保存场景信息
+            import json
+            with open(output_dir / 'scene_info.json', 'w') as f:
+                json.dump(scene_info, f, indent=4)
+                
             cap.release()
-            return keyframe_paths
+            return keyframe_paths, scene_info
         except Exception as e:
-            print(f"Error saving keyframes: {e}")
-            return []
+            print(f"保存关键帧时出错: {e}")
+            return [], []
 
     def __del__(self):
         try:
@@ -229,43 +254,81 @@ class KeyFrameExtractor:
         except Exception as e:
             print(f"Error releasing video source: {e}")
 
-    def extract_by_content(self, threshold=2.0):
+    def extract_by_content(self):
         """
-        基于内容检测提取关键帧
+        优化的内容检测方法
         """
-        # 使用scenedetect库来检测视频中的关键帧
-        # 使用ContentDetector来检测视频中的关键帧
-        # 整个过程就是封装成了一个api函数，直接调用这个函数即可就可以找到场景scenes了
         try:
-            video_path = str(self.video_path)
-            scenes = detect(video_path, ContentDetector(threshold=threshold))
-            return self._save_keyframes(scenes, "content")
+            print(f"\n使用内容检测:")
+            print(f"- 检测阈值: {self.config['content_threshold']}")
+            
+            detector = ContentDetector(
+                threshold=self.config['content_threshold'],
+                min_scene_len=self.config['min_scene_len'],
+                luma_only=self.config['luma_only']
+            )
+            
+            scenes = detect(str(self.video_path), detector)
+            if not scenes:
+                print(f"没有检测到场景, 尝试降低阈值")
+                self.config['content_threshold'] -= 1
+                return self.extract_by_content()
+            keyframes, scene_info = self._save_keyframes(scenes, "content")
+            
+            print(f"内容检测完成:")
+            print(f"- 检测到 {len(scenes)} 个场景")
+            if scene_info:
+                print(f"- 平均场景时长：{np.mean([info['duration'] for info in scene_info]):.2f}秒")
+            return keyframes, scene_info
         except Exception as e:
-            print(f"Error detecting scenes: {e}")
-            return []        
-        
-    
-    def extract_by_adaptive(self, min_scene_len=2):
+            print(f"内容检测失败: {e}")
+            return [], []
+
+    def extract_by_adaptive(self):
         """
-        基于自适应检测提取关键帧
+        优化的自适应检测方法
         """
         try:
             print(f"\n使用自适应检测:")
-            print(f"- 最小场景长度: {min_scene_len}帧")
-            print(f"- 视频帧率: {self.fps}")
-            print(f"- 视频总时长: {self.duration:.2f}秒")
-            video_path = str(self.video_path)
+            print(f"- 自适应阈值: {self.config['adaptive_threshold']}")
+            
             detector = AdaptiveDetector(
-                min_scene_len=min_scene_len,  # 最小场景长度
+                min_scene_len=self.config['min_scene_len'],
+                adaptive_threshold=self.config['adaptive_threshold'],
+                luma_only=self.config['luma_only'],
+                window_width=2,
+                min_content_val=15,
             )
-            scenes = detect(video_path, detector, show_progress=True)
-            keyframes = self._save_keyframes(scenes, "adaptive")
-            print(f"自适应检测完成: 找到 {len(keyframes)} 个场景")
-            return keyframes   
+            
+            scenes = detect(str(self.video_path), detector)
+            if not scenes:
+                print(f"没有检测到场景, 尝试降低阈值")
+                detector = AdaptiveDetector(
+                    min_scene_len=self.config['min_scene_len'],
+                    adaptive_threshold=1,
+                    luma_only=self.config['luma_only'],
+                    window_width=2,
+                    min_content_val=15,
+                )
+                scenes = detect(str(self.video_path), detector)
+            if not scenes:
+                print(f"没有检测到场景, 建议尝试其他检测方法")
+                return [], []
+            keyframes, scene_info = self._save_keyframes(scenes, "adaptive")
+            
+            # 计算统计信息
+            durations = [info['duration'] for info in scene_info]
+            print(f"自适应检测完成:")
+            print(f"- 检测到 {len(scenes)} 个场景")
+            print(f"- 最短场景: {min(durations):.2f}秒")
+            print(f"- 最长场景: {max(durations):.2f}秒")
+            print(f"- 平均场景时长: {np.mean(durations):.2f}秒")
+            
+            return keyframes, scene_info
         except Exception as e:
-            print(f"Error detecting scenes: {e}")
-            return []
-    
+            print(f"自适应检测失败: {e}")
+            return [], []
+
     def extract_by_interval(self, interval=0.2):
         """基于间隔提取关键帧"""
         try:
@@ -281,9 +344,10 @@ class KeyFrameExtractor:
             print(f"- 帧率: {self.fps}")
             print(f"- 总帧数: {self.frame_count}")
             print(f"- 提取间隔: {interval}秒")
-
-            frame_interval = int(self.fps / interval)
-            expected_num_frames = int(self.frame_count / frame_interval)
+            # 计算提取间隔的帧数
+            frame_interval = int(self.fps * interval)
+            # 理论应提取帧数
+            total_frame = int(self.frame_count / frame_interval)
             output_dir = self.output_dir / "interval"
             output_dir.mkdir(exist_ok=True)
             keyframe_paths = []
@@ -291,12 +355,16 @@ class KeyFrameExtractor:
             cap = cv2.VideoCapture(str(self.video_path))
             saved_count = 0
             frame_count = 0
-            while cap.isOpened():
+            while True:
                 ret, frame = cap.read()
                 if not ret:
                     break
+                # 如果当前帧数是提取间隔的整数倍，则提取关键帧
                 if frame_count % frame_interval == 0:
-                    output_path = output_dir / f"keyframe_{frame_count:04d}.jpg"
+                    # 计算当前帧的时间戳    
+                    timestamp = frame_count / self.fps
+                    # 保存关键帧
+                    output_path = output_dir / f"keyframe_{timestamp:.2f}s.jpg"
                     cv2.imwrite(str(output_path), frame)
                     keyframe_paths.append(output_path)
                     saved_count += 1
@@ -304,83 +372,123 @@ class KeyFrameExtractor:
                 frame_count += 1
             cap.release()
             print(f"实际提取帧数: {saved_count}")
+            print(f"理论应提取帧数: {total_frame}")
+            # 允许误差1帧
+            if abs(saved_count - total_frame)>1:
+                print(f"实际提取帧数与理论应提取帧数不一致, 请检查视频是否被剪辑过")
+                print(f"可能原因：")
+                print(f"1. 视频帧率不均匀") 
+                print(f"2. 视频末尾存在不完整帧")
+                print(f"3. 舍入误差导致")
             return keyframe_paths
         except Exception as e:
             print(f"固定间隔提取失败: {e}")
             print(f"错误详情: {str(e)}")
             return []
         
-    def extract_all_methods(self):
-        """提取所有方法的关键帧"""
-        print("开始提取关键帧。。。")
-        results = {}
-        methods = {
-            "content": self.extract_by_content(),
-            "adaptive": self.extract_by_adaptive(),
-            "interval": self.extract_by_interval(),
-            # "difference": self.extract_by_difference()
-        }
-
-        for method, frames in methods.items():
-            print(f"\n{method}方法:")
-            print(f"- 提取了 {len(frames)} 个关键帧")
-            print(f"- 保存位置: {self.output_dir}/{method}/")
-        return results
-
-    # def extract_by_difference(self, threshold=30):
-    #     """基于图像差异提取关键帧"""
-    #     keyframe_paths = []
-    #     output_dir = self.output_dir / "difference"
-    #     output_dir.mkdir(exist_ok=True)
-        
-    #     cap = cv2.VideoCapture(str(self.video_path))
-    #     prev_frame = None
-    #     frame_count = 0
-        
-    #     while True:
-    #         ret, frame = cap.read()
-    #         if not ret:
-    #             break
-                
-    #         if prev_frame is not None:
-    #             # 计算帧间差异
-    #             diff = cv2.absdiff(frame, prev_frame)
-    #             mean_diff = np.mean(diff)
-                
-    #             if mean_diff > threshold:
-    #                 output_path = output_dir / f"keyframe_{frame_count:04d}.jpg"
-    #                 cv2.imwrite(str(output_path), frame)
-    #                 keyframe_paths.append(output_path)
-                    
-    #         prev_frame = frame.copy()
-    #         frame_count += 1
+    def evaluate_results(self, results):
+        """
+        评估不同方法的结果
+        """
+        try:
+            print("\n结果评估:")
             
-    #     cap.release()
-    #     return keyframe_paths
+            # 遍历results中的每个方法，获取关键帧和场景信息
+            # results是一个字典，key是方法名，value是一个元组，包含关键帧和场景信息 
+            for method_name, result in results.items():
+                try:
+                    if not result:
+                        print(f"{method_name}方法没有提取到关键帧")
+                        continue
+                    if isinstance(result, tuple) and len(result) == 2:
+                        frames, info = result
+                    elif isinstance(result, list):
+                        frames,info = result,None
+                    else:
+                        print(f"\n{method_name}方法结果格式不正确")
+                        continue
+                    print(f"\n{method_name}方法评估:")
+                    print(f"- 关键帧数量: {len(frames)}")
 
+                    if info and isinstance(info, list):
+                        try:
+                            durations = [i['duration'] for i in info]
+                            print(f"- 平均场景时长: {np.mean(durations):.2f}秒")
+                            print(f"- 场景时长方差: {np.var(durations):.2f}")
+                        except (KeyError, TypeError) as e:
+                            print(f"无法计算场景时长: {str(e)}")
+                    if hasattr(self, 'duration') and self.duration>0:
+                        density = len(frames) / self.duration
+                        print(f"- 检测密度: {density:.2f}帧/秒")
+                except Exception as e:
+                    print(f"评估{method_name}方法时出错: {str(e)}")
+                    continue
+        except Exception as e:
+            print(f"结果评估失败: {str(e)}")
+
+    def extract_all_methods(self):
+        """
+        提取所有方法的关键帧并评估
+        """
+        try:
+            print("开始提取关键帧...")
+            results = {
+            "content": self._ensure_tuple(self.extract_by_content()),
+            "adaptive": self._ensure_tuple(self.extract_by_adaptive()),
+            "interval": self._ensure_tuple(self.extract_by_interval())
+        }
+        
+            self.evaluate_results(results)
+            return results
+        except Exception as e:
+            print(f"提取关键帧失败: {str(e)}")
+            return {}
+    def _ensure_tuple(self, result):
+        """
+        确保结果是一个元组
+        Args:
+            result: 输入结果，可能是列表或元组
+        Returns:
+            tuple: (frames, info) 格式的元组
+        """
+        return_value = ([],None)
+
+        if isinstance(result, list):
+            return_value = (result,None)
+        elif isinstance(result, tuple) and len(result) == 2:
+            return_value = result
+        return return_value
+    
+@staticmethod
+def print_statistics(results):
+    print(f"\n ------------------------")
+    print(f" 关键帧提取结果统计")
+    print(f" ------------------------")
+    for method_name, result in results.items():
+        frames, _ = result
+        frame_count = len(frames) if frames else 0
+        if method_name =='interval':
+            print(f"{method_name}方法提取了{frame_count}个关键帧")
+        else:
+            print(f"{method_name}方法提取了{frame_count}个关键帧")
+        save_dir = Path(OUTPUT_DIR) / method_name
+        if save_dir.exists():
+            print(f"关键帧保存在: {save_dir}")
+    total_frames = sum(len(frames) for frames in results.values())
+    print(f"总共提取了{total_frames}个关键帧")
+   
 def extract_keyframes():
     try:    
         print("初始化关键帧提取器。。。。")
-        extractor = KeyFrameExtractor(video_path=SOURCE_VIDEO, output_dir=OUTPUT_DIR,
-                                      config={
-                                          "content_threshold": 2.0,
-                                          "min_scene_len": 2,  
-                                          "interval": 0.2,
-                                      })
+        extractor = KeyFrameExtractor(video_path=SOURCE_VIDEO, output_dir=OUTPUT_DIR)
         print("开始提取关键帧。。。")
-        all_frames = extractor.extract_all_methods()
+        results = extractor.extract_all_methods()
         print(f"\n视频信息:")
         print(f"时长: {extractor.duration:.2f}秒")
         print(f"帧率: {extractor.fps}")
         print(f"总帧数: {extractor.frame_count}")
-        for method, frames in all_frames.items():
-            print(f"{method} method has {len(frames)} keyframes")
-            print(f"关键帧保存在: {OUTPUT_DIR}/{method}/")
-        print(f"所有关键帧提取完成。。。")
-        print("-"*50)
         print("结果统计：")
-        for method, frames in all_frames.items():
-            print(f"{method}方法提取了{len(frames)}个关键帧")
+        print_statistics(results)
     except Exception as e:
         print(f"Error extracting keyframes: {e}")
 
