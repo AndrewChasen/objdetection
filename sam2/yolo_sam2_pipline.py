@@ -4,14 +4,11 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt 
 import cv2
-from PIL import Image
 from sam2.build_sam import build_sam2_video_predictor
-from supervision.assets import download_assets, VideoAssets
 from pathlib import Path
 from scenedetect import detect, ContentDetector,AdaptiveDetector
 from scenedetect.scene_manager import save_images
 from typing import List, Optional, Any, Dict, Protocol, Tuple, Type
-import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from typing import Union
@@ -28,7 +25,6 @@ def setup_device():
     # print(f"Using device: {device}")
     print(f"using device:{device}")
     return torch.device(device=device)
-
 
 checkpoint = "./checkpoints/sam2.1_hiera_tiny.pt"
 model_cfg = "configs/sam2.1/sam2.1_hiera_t.yaml"
@@ -166,7 +162,7 @@ class FrameConfig:
     """帧处理配置类
     
     该类管理视频帧处理的所有配置参数，包括路径设置、保存选项、
-    场景检测参数、阈值设置等。支持从JSON文件加载和保存配置。
+    场景检测参数、阈值设���等。支持从JSON文件加载和保存配置。
     
     Attributes:
         output_dir (Path): 输出目录路径
@@ -203,13 +199,16 @@ class FrameConfig:
     # 默认配置
     output_dir: Path = field(default_factory=lambda: Path('./assets/keyframes'))
     video_path: Path = field(default_factory=lambda: Path('./assets/video'))
+
     # 保存设置
     save_image_format: str = 'jpg'
     save_frames: bool = True
     save_metadata: bool = True
 
+    # 图像处理设置
     resize_frame: bool = True
     frame_size: Tuple[int, int] = (640, 480)
+
     # 场景检测配置
     scene_detection: Dict[str, SceneDetectionConfig] = field(default_factory=lambda: {
         'fast': SceneDetectionConfig(threshold=30, min_scene_len=0.3),
@@ -219,8 +218,10 @@ class FrameConfig:
     # 处理阈值
     quality_threshold: float = 0.6
     similarity_threshold: float = 0.85
+
     # 并行提取
-    parallel_extract: bool = True    
+    parallel_extract: bool = True 
+
     # 分类规则
     categories:Dict[str, List[str]] = field(default_factory=lambda: {
         'key_frames':['motion', 'object', 'quality'],
@@ -647,11 +648,11 @@ class Frame:
                     'image_path':str(image_path),
                     'shape':self.shape,
                     'format':config.save_image_format,
-                    'metadata':self.metadata
+                    'additional_metadata':self.metadata
                 }
                 metadata_path = save_path.with_suffix('.json')
                 with open(metadata_path, 'w',encoding='utf-8') as f:
-                    json.dump(self.metadata, f, indent=4,ensure_ascii=False)
+                    json.dump(metadata, f, indent=4,ensure_ascii=False)
                     
             logger.info(f"保存帧成功: {image_path} (类别: {category or 'unknown'})")
             return True
@@ -684,6 +685,7 @@ class KeyFrameExtractor(ABC):
         Args:
             config: 配置参数字典
         """
+
         if config is None:
             raise ValueError("配置参数不能为空")
         self.config = config
@@ -767,6 +769,7 @@ class KeyFrameExtractor(ABC):
         try:
             video_path = Path(video_path)
             if not video_path.exists():
+                self.logger.error(f"视频文件不存在: {video_path}")
                 raise ValueError(f"视频文件不存在: {video_path}")
             self.video_capture = cv2.VideoCapture(str(video_path))
             if not self.video_capture.isOpened():
@@ -833,7 +836,10 @@ class KeyFrameExtractor(ABC):
             return frame
         return None
     
-    def create_frame(self, image:np.ndarray, metadata:Optional[Dict[str,Any]]=None)->Optional[Frame]:
+    def create_frame(self, image:np.ndarray, 
+                     metadata:Optional[Dict[str,Any]]=None,
+                     frame_index:Optional[int]=None,
+                     timestamp:float=0.0)->Optional[Frame]:
         """创建标准化的帧对象
         
         Args:
@@ -847,25 +853,26 @@ class KeyFrameExtractor(ABC):
             if image is None:
                 self.logger.error("帧图像数据为空")
                 return None
-            timestamp = self.current_frame_idx / self.fps if self.fps >0 else 0
+            current_idx = frame_index if frame_index is not None else self.current_frame_idx
+            current_timestamp = timestamp if timestamp is not None else (current_idx / self.fps if self.fps >0 else 0)
             base_metadata = {
                 'extractor_type':self.__class__.__name__,
-                'frame_index': self.current_frame_idx,
-                'timestamp': timestamp,
+                'frame_index': current_idx,
+                'timestamp': current_timestamp,
                 'extraction_time': datetime.now().isoformat(),
             }
             if metadata:
                 base_metadata.update(metadata)
             frame = Frame(image=image, 
                          metadata=base_metadata,
-                         frame_index=self.current_frame_idx,
-                         timestamp=timestamp)
+                         frame_index=current_idx,
+                         timestamp=current_timestamp)
             self.logger.debug(f"创建帧对象成功: {frame},index:{frame.frame_index},timestamp:{frame.timestamp}")
             return frame
         
         except Exception as e:
             self.logger.error(f"创建帧对象失败: {str(e)}")
-            return None          
+            return None
         
     def release_video(self)->None:
         """释放视频资源"""
@@ -950,14 +957,14 @@ class ContentDetectorExtractor(KeyFrameExtractor):
             if ret and first_frame is not None:
                 self.logger.info(f"读取第一帧成功。帧形状：{first_frame.shape}")
                 processed_first_frame = self.preprocess_frame(first_frame)
-                if processed_first_frame is None:
+                if processed_first_frame is not None:
                     first_frame_obj = self.create_frame(
                         image=processed_first_frame,
                         metadata={'method':'content_detection',
                                   'detection_mode':'first_frame',
-                                'scene_idx': 0,  
-                                'note':'视频第一帧',                        
-                                # 'threshold': self.threshold,                                
+                                  'scene_idx': 0,  
+                                  'note':'视频第一帧',                        
+                                 'threshold': self.threshold,                                
                         }
                     )
                     if first_frame_obj:
@@ -969,10 +976,12 @@ class ContentDetectorExtractor(KeyFrameExtractor):
                         image=first_frame,
                         metadata={'method':'content_detection',
                                   'detection_mode':'first_frame',
-                                'scene_idx': 0,  
-                                'note':'视频第一帧(原始帧)',                        
-                                # 'threshold': self.threshold,                                
-                        }
+                                  'scene_idx': 0,  
+                                  'note':'视频第一帧(原始帧)',                        
+                                  'threshold': self.threshold,                                
+                        },
+                        frame_index=start_frame,
+                        timestamp=timestamp
                     )
                     if first_frame_obj:
                         all_keyframes.append(first_frame_obj)
@@ -1054,7 +1063,53 @@ class ContentDetectorExtractor(KeyFrameExtractor):
         
         finally:
             self.release_video()
-               
+
+    def _calculate_confidence(self, frame: np.ndarray) -> float:
+        """计算帧的置信度分数
+        
+        Args:
+            frame: 输入帧
+            
+        Returns:
+            float: 置信度分数 (0-1)
+        """
+        try:
+            if frame is None:
+                return 0.0
+                
+            # 转换为灰度图
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            
+            # 计算清晰度 (使用Laplacian算子)
+            clarity = cv2.Laplacian(gray, cv2.CV_64F).var()
+            clarity_score = min(1.0, clarity / 500.0)
+            
+            # 计算亮度
+            brightness = np.mean(gray)
+            brightness_score = 1.0 - abs(brightness - 128) / 128
+            
+            # 计算对比度
+            contrast = np.std(gray)
+            contrast_score = min(1.0, contrast / 64.0)
+            
+            # 综合评分
+            confidence = (
+                clarity_score * 0.4 +
+                brightness_score * 0.3 +
+                contrast_score * 0.3
+            )
+            
+            self.logger.debug(f"帧置信度计算 - 清晰度: {clarity_score:.2f}, "
+                            f"亮度: {brightness_score:.2f}, "
+                            f"对比度: {contrast_score:.2f}, "
+                            f"最终分数: {confidence:.2f}")
+            
+            return float(confidence)
+            
+        except Exception as e:
+            self.logger.error(f"计算置信度失败: {e}")
+            return 0.0
+
 # class AdaptiveDetectorExtractor(KeyFrameExtractor):
     # """自适应场景切换检测器 
         
@@ -1383,6 +1438,11 @@ class FrameProcessor:
         """
         merged_frames = []
         for frames in extractor_results.values():
+            # 将每个提取器的帧结果添加到合并帧列表中
+            # frames 是一个包含帧对象的列表
+            # merged_frames 是一个合并后的帧列表
+            # extend 方法用于将 frames 列表中的所有元素添加到 merged_frames 列表中
+            # 这样可以将所有提取器的结果合并到一个列表中
             merged_frames.extend(frames)
         merged_frames.sort(key=lambda x: x.timestamp)
         return merged_frames
@@ -1518,7 +1578,7 @@ class KeyFrameManager:
         try:
             for i, frame in enumerate(frames):
                 frame_name = f"{extractor_name}_{i:04d}"
-                frame.save_frame(config=self.config, frame_name=frame_name,category=extractor_name)
+                frame.save_frame(config=self.config, frame_name=frame_name, category=extractor_name)
 
             if self.config.save_metadata:   
                 metadata_path = output_dir / f"{frame_name}.json"
@@ -1529,6 +1589,7 @@ class KeyFrameManager:
                     'path': str(metadata_path),
                 }
                 frame.add_metadata('save_info',metadata)
+
         except Exception as e:
             logger.error(f"保存单个提取器结果失败: {e}")
             import traceback
@@ -1599,6 +1660,7 @@ def process_video(video_path:Union[str, Path], output_dir:Union[str, Path])->Lis
                     )
                 }
             )
+
         extractors = {  
             'content': ContentDetectorFactory(),
         }
@@ -1664,7 +1726,7 @@ def process_video(video_path:Union[str, Path], output_dir:Union[str, Path])->Lis
         pass
     
 if __name__ == "__main__":
-    video_path = "./assets/video/01_dog.mp4"
+    video_path = "./assets/video/06.mp4"
     output_dir = "./assets/video/keyframes"
 
     try:
