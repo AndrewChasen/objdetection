@@ -10,7 +10,7 @@ from supervision.assets import download_assets, VideoAssets
 from pathlib import Path
 from scenedetect import detect, ContentDetector,AdaptiveDetector
 from scenedetect.scene_manager import save_images
-from typing import List, Optional, Any, Dict, Tuple, Type
+from typing import List, Optional, Any, Dict, Protocol, Tuple, Type
 import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
@@ -1450,36 +1450,29 @@ class FrameProcessor:
         except Exception as e:
             print(f"计算相似度失败: {e}")
             return 0.0
-
+        
+class ExtractorFactory(Protocol):
+    def create(self, conifg:FrameConfig)->'KeyFrameExtractor':
+        pass
+    
+class ContentDetectorFactory:
+    def create(self, conifg:FrameConfig)->'ContentDetectorExtractor':
+        return ContentDetectorExtractor(config=conifg)
+    
 class KeyFrameManager:
     """关键帧提取管理器
     
     统一管理所有关键帧提取器，整合输出结果
     """
-    def __init__(self, config:FrameConfig):
+    def __init__(self, config:FrameConfig, extractors:Dict[str, ExtractorFactory]):
         """
         初始化管理器
         """
         self.config = config
-        self.extractors = self._init_extractors()
+        self.extractors = extractors
         self.frame_processor = FrameProcessor()
 
-        
-        
-    def _init_extractors(self)->Dict[str, Type[KeyFrameExtractor]]:
-        """初始化所有提取器"""
-        return {
-            # 这里存储的是类，不是实例
-                'content': ContentDetectorExtractor,
-                # 'adaptive_switch': AdaptiveDetectorExtractor,
-                # 'interval_switch': IntervalDetectorExtractor,
 
-                # 'motion_fixed': MotionDetectionExtractor,
-                # 'object_fixed': ObjectDetectionExtractor,
-                # 'quality_fixed': QualityDetectionExtractor,
-                # 'clustering_fixed': ClusteringExtractor,
-            }
-    
     def process_video(self, video_path:str)->List[Frame]:
         """处理视频并整合所有提取器的结果
         
@@ -1491,11 +1484,11 @@ class KeyFrameManager:
         """
         try:    
             extractor_results = {}
-            for name, extractor_class in self.extractors.items():
+            for name, factory in self.extractors.items():
                 extractor_output = Path(self.config.output_dir) / name
                 extractor_output.mkdir(parents=True, exist_ok=True)
 
-                extractor = extractor_class(self.config)
+                extractor = factory.create(self.config)
                 frames = extractor.extract(video_path)
                 if frames:
                     self._save_extractor_results(frames, extractor_output, name)
@@ -1522,9 +1515,10 @@ class KeyFrameManager:
     
     def _save_extractor_results(self, frames:List[Frame], output_dir:Path, extractor_name:str)->None:
         """保存单个提取器的结果"""
-        for i, frame in enumerate(frames):
-            frame_name = f"{extractor_name}_{i:04d}"
-            frame.save_frame(config=self.config, frame_name=frame_name,category=extractor_name)
+        try:
+            for i, frame in enumerate(frames):
+                frame_name = f"{extractor_name}_{i:04d}"
+                frame.save_frame(config=self.config, frame_name=frame_name,category=extractor_name)
 
             if self.config.save_metadata:   
                 metadata_path = output_dir / f"{frame_name}.json"
@@ -1535,22 +1529,26 @@ class KeyFrameManager:
                     'path': str(metadata_path),
                 }
                 frame.add_metadata('save_info',metadata)
+        except Exception as e:
+            logger.error(f"保存单个提取器结果失败: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _save_final_results(self, frames:List[Frame], output_dir:Path)->None:
         """保存最终结果"""
         try:
             for i, frame in enumerate(frames):
                 frame_name = f"final_{i:04d}"
-            frame.save_frame(config=self.config, frame_name=frame_name,category='final')
-            if self.config.save_metadata:
-                metadata_path = output_dir / f"{i:04d}.json"
-                metadata = {
-                    'path': str(metadata_path),
-                    'category': 'final',
-                    'frame_index': frame.frame_index,
-                    'timestamp': frame.timestamp,
-                }
-                frame.add_metadata('save_info',metadata)
+                frame.save_frame(config=self.config, frame_name=frame_name,category='final')
+                if self.config.save_metadata:
+                    metadata_path = output_dir / f"{i:04d}.json"
+                    metadata = {
+                        'path': str(metadata_path),
+                        'category': 'final', 
+                        'frame_index': frame.frame_index,
+                        'timestamp': frame.timestamp,
+                    }
+                    frame.add_metadata('save_info',metadata)
         except Exception as e:
             logger.error(f"保存最终结果失败: {e}")
             import traceback
@@ -1601,8 +1599,11 @@ def process_video(video_path:Union[str, Path], output_dir:Union[str, Path])->Lis
                     )
                 }
             )
+        extractors = {  
+            'content': ContentDetectorFactory(),
+        }
 
-        manager = KeyFrameManager(config)
+        manager = KeyFrameManager(config, extractors)
         print(f"处理视频: {video_path}")
         frames = manager.process_video(video_path)
         print(f"提取了{len(frames)}个关键帧")
