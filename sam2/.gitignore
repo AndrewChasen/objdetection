@@ -35,3 +35,7 @@ model.torch
 annotation.png
 mix.png
 test/
+.gitignore
+logs/
+best_model.pth
+config.json
