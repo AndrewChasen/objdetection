@@ -1,11 +1,10 @@
 from dataclasses import dataclass
-from enum import Enum, auto
 import cv2
-from scenedetect import detect, ContentDetector,AdaptiveDetector
+from scenedetect import detect, ContentDetector
 import numpy as np
 from .base import KeyFrameExtractor
-from ..models import Frame
-from ..app import AppInitializer
+from models import Frame
+from app import AppInitializer
 
 class ConfigError(Exception):
     """配置错误异常类"""

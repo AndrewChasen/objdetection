@@ -1,6 +1,13 @@
 from abc import ABC, abstractmethod
-from ..models import Frame
-from ..bridge import LoggerBridge
+from datetime import datetime
+import logging
+from pathlib import Path
+from typing import Any, Dict, Optional, Union
+
+import cv2
+import numpy as np
+from models import Frame
+from app import AppInitializer
 
 class KeyFrameExtractor(ABC):
     """关键帧提取器基类
@@ -19,17 +26,17 @@ class KeyFrameExtractor(ABC):
         current_frame_idx: 当前帧索引
     """
 
-    def __init__(self,config:FrameConfig):
+    def __init__(self):
         """初始化提取器
         
         Args:
             config: 配置参数字典
         """
 
-        if config is None:
-            raise ValueError("配置参数不能为空")
-        self.config = config
         self.video_capture = None
+
+        app = AppInitializer.get_instance()
+        self.frame_config = app.frame_bridge
         
         self.fps = 0
         self.frame_count = 0

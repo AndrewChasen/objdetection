@@ -11,6 +11,7 @@ fn sam2_rust_bridge(py:Python, m:&PyModule)->PyResult<()>{
 
     m.add_class::<frame::PyFrameConfig>()?;
     logging::register_logger(py, m)?;
+    
 
     Ok(())
 }
