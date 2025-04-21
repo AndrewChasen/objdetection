@@ -1,0 +1,19 @@
+[package]
+name = "tools"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+common = { path = "../common" }
+tokio = { version = "1.44.2", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+config = "0.15.11"
+anyhow = "1.0"
+thiserror = "2.0.12"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+async-trait = "0.1"
+
+# 暂时注释掉，等待MCP SDK可用时添加
+# rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main", features = ["server","macros"] }

@@ -1,0 +1,17 @@
+# Rust编译输出
+/target/
+**/*.rs.bk
+
+# IDE文件
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# 日志文件
+*.log
+
+# 临时文件
+*.tmp
+*.swp
+*.swo

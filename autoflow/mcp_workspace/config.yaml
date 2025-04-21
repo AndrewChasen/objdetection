@@ -1,0 +1,23 @@
+meta_agent:
+  transport: "stdio"            # 本地开发阶段推荐
+  llm:
+    provider: "openai"
+    api_key: "${LLM_API_KEY}"
+agents:
+  vpn:
+    enabled: true
+    transport: "stdio"
+  content:
+    enabled: true
+    transport: "stdio"
+  storage:
+    enabled: true
+    transport: "stdio"
+postgres:
+  url: "postgres://user:pass@localhost:5432/db"
+logging:
+  level: "debug"
+  file: "/var/log/mcp.log"
+retry:
+  max_attempts: 3
+  backoff_secs: [1,2,4] 
