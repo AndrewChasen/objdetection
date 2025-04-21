@@ -67,22 +67,20 @@ impl ClientSession {
 
     // 调用LLM进行工具筛选
     fn filter_tools(&self, agent_name: &str, user_request: &str) -> Vec<ToolInfo> {
-        println!("Filtering tools for agent: {}", agent_name);
+        println!("过滤{}的工具", agent_name);
         // 获取该Agent的所有工具
         let all_tools = match self.tools.get(agent_name) {
             Some(tools) => tools,
             None => {
-                println!("No tools found for agent: {}", agent_name);
+                println!("未找到{}的工具", agent_name);
                 return Vec::new();
             }
         };
 
-        // 模拟LLM选择工具的过程
-        // 简单起见，这里选择前两个工具作为示例
-        // 实际应用中，会通过LLM决定哪些工具适合当前任务
-        println!("Selecting tools for task: {}", user_request);
+        // 模拟工具选择过程
+        println!("为任务'{}'选择工具", user_request);
         
-        // 从迭代器中创建一个新的集合，克隆前两个工具
+        // 选择前两个工具作为示例
         let mut selected_tools = Vec::new();
         for tool in all_tools.iter().take(2) {
             selected_tools.push(tool.clone());
@@ -125,22 +123,55 @@ async fn three_step_filtering(
     session: &ClientSession,
     user_query: &str,
 ) -> Result<Vec<Task>> {
+    let trace_id = Uuid::new_v4().to_string();
+    info!(%trace_id, "开始三步分层筛选流程");
+    
     // 第一步：Agent识别
-    info!("第一步：Agent识别");
+    info!(%trace_id, "第一步：Agent识别");
+    let all_agents = get_all_agent_descriptions();
+    info!(%trace_id, "获取到 {} 个Agent描述", all_agents.len());
+    
     let selected_agents = session.filter_agents(user_query).await?;
-    info!("选中的Agent: {:?}", selected_agents);
+    info!(%trace_id, "筛选出 {} 个相关Agent", selected_agents.len());
     
     // 第二步：工具筛选
-    info!("第二步：工具筛选");
-    let selected_tools = session.filter_tools("VPNAgent", user_query);
-    info!("选中的工具: {:?}", selected_tools);
+    info!(%trace_id, "第二步：工具筛选");
+    let mut all_tools = Vec::new();
+    
+    for agent_name in &selected_agents {
+        let agent_tools = session.filter_tools(agent_name, user_query);
+        all_tools.extend(agent_tools);
+    }
+    info!(%trace_id, "获取到 {} 个工具描述", all_tools.len());
     
     // 第三步：执行计划生成
-    info!("第三步：执行计划生成");
-    let tasks = session.generate_plan(user_query, &selected_tools).await?;
-    info!("生成的任务: {:?}", tasks);
+    info!(%trace_id, "第三步：执行计划生成");
+    let tasks = session.generate_plan(user_query, &all_tools).await?;
+    info!(%trace_id, "生成了 {} 个任务的执行计划", tasks.len());
     
     Ok(tasks)
+}
+
+// 辅助函数：获取所有Agent描述
+fn get_all_agent_descriptions() -> Vec<AgentMetadata> {
+    // 实际实现中，可从配置或服务注册中心获取
+    vec![
+        AgentMetadata {
+            name: "VPNAgent".to_string(),
+            description: "处理VPN连接相关操作的专用Agent".to_string(),
+            version: "1.0".to_string(),
+        },
+        AgentMetadata {
+            name: "ContentAgent".to_string(),
+            description: "处理内容采集相关操作的专用Agent".to_string(),
+            version: "1.0".to_string(),
+        },
+        AgentMetadata {
+            name: "StorageAgent".to_string(),
+            description: "处理数据存储相关操作的专用Agent".to_string(),
+            version: "1.0".to_string(),
+        },
+    ]
 }
 
 #[instrument(name = "meta_agent", level = "debug", skip_all)]
@@ -244,17 +275,42 @@ async fn main() -> Result<()> {
     
     info!("收到用户请求: {:?}", user_request);
     
-    // 使用三步分层筛选机制处理请求
-    let tasks = three_step_filtering(&session, &format!("{:?}", user_request)).await?;
+    // 处理用户请求
+    handle_user(&session, user_request).await?;
     
-    // 执行任务
+    Ok(())
+}
+
+// 处理用户请求的主函数
+async fn handle_user(
+    session: &ClientSession,
+    req: UserRequest
+) -> Result<()> {
+    let trace_id = Uuid::new_v4().to_string();
+    info!(%trace_id, "接收到用户请求: {:?}", req);
+
+    // 1. 三步分层筛选，获取任务列表
+    let user_query = format!("{:?}", req);
+    let tasks = three_step_filtering(session, &user_query).await?;
+    info!(%trace_id, "解析得到 {} 个任务", tasks.len());
+
+    // 2. 执行子任务
+    let mut results = Vec::new();
     for task in &tasks {
-        info!("执行任务: {:?}", task);
-        let result = session.call_tool(&format!("{}.{}", task.agent, task.tool), task.params.clone()).await?;
-        info!("任务结果: {:?}", result);
+        info!(%trace_id, task_id=%task.id, "执行任务: {}.{}", task.agent, task.tool);
+        let result = session
+            .call_tool(&format!("{}.{}", task.agent, task.tool), task.params.clone())
+            .await;
+            
+        match result {
+            Ok(resp) => {
+                info!(%trace_id, task_id=%task.id, "任务执行成功");
+                results.push(resp);
+            }
+            Err(e) => error!(%trace_id, task_id=%task.id, "任务执行失败: {}", e),
+        }
     }
-    
-    info!("所有任务执行完成");
-    
+
+    info!(%trace_id, "所有任务执行完成");
     Ok(())
 }
